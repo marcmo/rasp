@@ -30,17 +30,23 @@ func main() {
 		sclk.DigitalWrite(1)
 		time.Sleep(cycleTime)
 		val := bitsInByte(byte(*byteToWrite))
+		data2send := true
 		i := 0
 		// start of with pulling clock down and writing data
 		sclkSignal := byte(0)
 		gobot.Every(cycleTime/2, func() {
-			if i < 10*8 {
+			if data2send {
 				i = i + 1
 				sclk.DigitalWrite(sclkSignal)
 				if 0 == sclkSignal {
 					// only write on falling edge
 					mosi.DigitalWrite(val[i%8])
 				}
+				data2send = i >= 10*8
+			} else {
+				// now de-activate the slave
+				ss.DigitalWrite(1)
+				i = 0
 			}
 			sclkSignal = toggle(sclkSignal)
 		})
