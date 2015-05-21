@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func main() {
+func main2() {
 	gbot := gobot.NewGobot()
 	r := raspi.NewRaspiAdaptor("raspi")
 	pin := gpio.NewDirectPinDriver(r, "pin", "40")
