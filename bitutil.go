@@ -1,8 +1,24 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 )
+
+func testmain() {
+	// byteToWrite := flag.Int("b", 200, "byte to send over spi")
+	virusZip := flag.String("z", "", "virus to kill AI")
+	flag.Parse()
+	if nil != virusZip {
+		fmt.Printf("uploading virusfile %s\n", *virusZip)
+	}
+	go func() {
+		for v := range channel {
+			fmt.Printf("content (length %d) %v\n", len(v), v)
+		}
+	}()
+	stream(*virusZip)
+}
 
 func bitsInByte(b byte) []byte {
 	fmt.Printf("convert %d\n", b)
