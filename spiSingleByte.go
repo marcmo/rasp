@@ -2,47 +2,69 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"github.com/hybridgroup/gobot"
 	"github.com/hybridgroup/gobot/platforms/gpio"
 	"github.com/hybridgroup/gobot/platforms/raspi"
 	"time"
 )
 
-func old_main() {
-	byteToWrite := flag.Int("b", 200, "byte to send over spi")
+func oldmain() {
+	byteToWrite := flag.Int("b", 100, "byte to send over spi")
+	flag.Parse()
 	gbot := gobot.NewGobot()
 	r := raspi.NewRaspiAdaptor("raspi")
 	mosi := gpio.NewDirectPinDriver(r, "pin", "36")
 	ss := gpio.NewDirectPinDriver(r, "pin", "37")
 	sclk := gpio.NewDirectPinDriver(r, "pin", "38")
-	cycleTime := 50 * time.Millisecond
+	cycleTime := 100 * time.Millisecond
 
 	work := func() {
 		// starting of with SS high
 		ss.DigitalWrite(1)
-		time.Sleep(10 * cycleTime)
+		fmt.Printf("SS HIGH\n")
+		time.Sleep(1 * cycleTime)
+		ss.DigitalWrite(0)
+		time.Sleep(1 * cycleTime)
+		ss.DigitalWrite(1)
+		time.Sleep(1 * cycleTime)
+		// start clocking
+		sclk.DigitalWrite(0) // start LOW
+		time.Sleep(1 * cycleTime)
 		// now activate the slave
 		ss.DigitalWrite(0)
-		time.Sleep(cycleTime)
-		// start clocking
-		// data only changes on the falling edge of SCLK and
-		// is only read on the rising edge of SCLK
-		sclk.DigitalWrite(1)
-		time.Sleep(cycleTime)
+		fmt.Printf("SS LOW\n")
 		val := bitsInByte(byte(*byteToWrite))
 		i := 0
 		// start of with pulling clock down and writing data
 		sclkSignal := byte(0)
 		gobot.Every(cycleTime/2, func() {
-			if i < 10*8 {
+			if i == 0 {
+				// write BEFORE pulling up
+				mosi.DigitalWrite(val[0])
+				time.Sleep(1 * cycleTime)
 				i = i + 1
-				sclk.DigitalWrite(sclkSignal)
+			} else if i < 5*8 {
 				if 0 == sclkSignal {
-					// only write on falling edge
+					sclkSignal = 1
+					fmt.Printf("0->1\n")
+					sclk.DigitalWrite(sclkSignal)
+				} else {
+					sclkSignal = 0
+					fmt.Printf("1->0\n")
+					sclk.DigitalWrite(sclkSignal)
 					mosi.DigitalWrite(val[i%8])
+					i = i + 1
 				}
+			} else {
+				sclk.DigitalWrite(0)
+				time.Sleep(1 * cycleTime)
+				sclk.DigitalWrite(1)
+				time.Sleep(1 * cycleTime)
+				sclk.DigitalWrite(0)
+				time.Sleep(1 * cycleTime)
+				ss.DigitalWrite(1)
 			}
-			sclkSignal = toggle(sclkSignal)
 		})
 	}
 

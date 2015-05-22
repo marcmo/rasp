@@ -11,60 +11,69 @@ import (
 	"time"
 )
 
-var channel = make(chan []byte)
-
 type SpiState int
 
 const (
-	NO_CHIP_SELECT SpiState = 1 << iota
-	CHIP_SELECT    SpiState = 2
-	CLOCKING       SpiState = 4
+	NO_CHIP_SELECT    SpiState = 1 << iota
+	CHIP_SELECT       SpiState = 2
+	FIRST_DATA_ON_BUS SpiState = 4
+	CLOCKING          SpiState = 8
 )
 
 func main() {
 	virusZip := flag.String("z", "", "virus to kill AI")
+	byteToWrite := flag.Int("b", 0xFFFF, "sample byte to send over spi")
 	flag.Parse()
+	var channel = make(chan []byte)
 	if "" != *virusZip {
 		fmt.Printf("uploading virusfile %s\n", *virusZip)
+		go stream(*virusZip, channel)
+	} else if *byteToWrite <= 0xFF {
+		go func() {
+			channel <- []byte{byte(*byteToWrite)}
+		}()
+	} else {
+		fmt.Printf("usage: -z <zipfile.zip>\n")
+		return
 	}
 	gbot := gobot.NewGobot()
 	r := raspi.NewRaspiAdaptor("raspi")
 	mosi := gpio.NewDirectPinDriver(r, "pin", "36")
 	ss := gpio.NewDirectPinDriver(r, "pin", "37")
 	sclk := gpio.NewDirectPinDriver(r, "pin", "38")
-	cycleTime := 50 * time.Millisecond
+	selectSlave := func() { ss.DigitalWrite(0) }
+	deselectSlave := func() { ss.DigitalWrite(1) }
+
+	cycleTime := 100 * time.Millisecond
 
 	work := func() {
 
 		spiState := NO_CHIP_SELECT
-		var BitChannel = make(chan byte)
+		var ByteChannel = make(chan byte)
 		go func() {
 			for v := range channel {
 				fmt.Printf("working on %v\n", v)
 				for _, b := range v {
-					for _, bit := range bitsInByte(b) {
-						BitChannel <- bit
-					}
+					ByteChannel <- b
 				}
 			}
 		}()
-		stream(*virusZip)
 		// starting of with SS high
-		ss.DigitalWrite(1)
+		deselectSlave()
 		time.Sleep(10 * cycleTime)
 
 		i := 0
 		// start of with pulling clock down and writing data
-		sclkSignal := byte(0)
+		nextClockSignal := byte(0)
 		nextByte := byte(0)
 		val := []byte{}
 		data2send := false
 
 		gobot.Every(cycleTime/2, func() {
-
+			// wait until we are idle before pulling new data
 			if !data2send && spiState == NO_CHIP_SELECT {
 				select {
-				case nextByte = <-BitChannel:
+				case nextByte = <-ByteChannel:
 					data2send = true
 					val = bitsInByte(nextByte)
 				default:
@@ -74,44 +83,51 @@ func main() {
 			switch spiState {
 			case NO_CHIP_SELECT:
 				if data2send {
-					// now activate the slave
-					ss.DigitalWrite(0)
+					selectSlave()
 					spiState = CHIP_SELECT
 				}
 				break
 			case CHIP_SELECT:
 				if data2send {
-					// start clocking
-					// data only changes on the falling edge of SCLK and
-					// is only read on the rising edge of SCLK
-					sclk.DigitalWrite(1)
-					spiState = CLOCKING
+					// write BEFORE pulling up
+					mosi.DigitalWrite(val[0])
+					spiState = FIRST_DATA_ON_BUS
 				} else {
-					// now de-activate the slave
-					ss.DigitalWrite(1)
+					deselectSlave()
 					spiState = NO_CHIP_SELECT
+				}
+				break
+			case FIRST_DATA_ON_BUS:
+				if data2send {
+					// start clocking
+					// by indicating SCLK UP
+					nextClockSignal = 1
+					sclk.DigitalWrite(nextClockSignal)
+					spiState = CLOCKING
 				}
 				break
 			case CLOCKING:
 				if data2send {
-					sclk.DigitalWrite(sclkSignal)
+					sclk.DigitalWrite(nextClockSignal)
 					// only write on falling edge
-					if 0 == sclkSignal {
+					if 0 == nextClockSignal {
+						mosi.DigitalWrite(val[i])
 						i = i + 1
 						data2send = i < 8
-						mosi.DigitalWrite(val[i])
 					}
 				} else {
 					i = 0
 					// only stop clocking after falling edge
-					if 0 == sclkSignal {
+					if 1 == nextClockSignal {
 						spiState = CHIP_SELECT
+					} else {
+						sclk.DigitalWrite(nextClockSignal)
 					}
 				}
 				break
 			default:
 			}
-			sclkSignal = toggle(sclkSignal)
+			nextClockSignal = toggle(nextClockSignal)
 		})
 	}
 
@@ -132,14 +148,14 @@ func toggle(i byte) byte {
 	}
 }
 
-func stream(f string) {
+func stream(f string, c chan<- []byte) {
 	fs, err := os.Open(f)
 	check(err)
 	defer fs.Close()
 	r := bufio.NewReader(fs)
 	for {
 		done, content := streamFile(r, 10)
-		channel <- content
+		c <- content
 		if done {
 			break
 		}
